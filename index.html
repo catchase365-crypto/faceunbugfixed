@@ -8,22 +8,22 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
     <style>
-        body { font-family: -apple-system, sans-serif; margin: 0; background: #000; color: white; display: flex; flex-direction: column; align-items: center; }
-        #container { position: relative; width: 100vw; height: 55vh; background: #111; overflow: hidden; margin-bottom: 15px;}
+        body { font-family: -apple-system, sans-serif; margin: 0; background: #ffffff; color: #000; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+        #container { position: relative; width: 100vw; height: 55vh; background: #ffffff; overflow: hidden; margin-bottom: 15px;}
         video { display: none; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
         
-        .dashboard { width: 90%; max-width: 400px; background: #1a1a1a; border-radius: 20px; padding: 20px; box-sizing: border-box; text-align: center; }
-        h2 { margin: 0 0 15px 0; font-size: 20px; color: #fff; }
-        #instruction { font-size: 22px; font-weight: bold; color: #ffeb3b; margin-bottom: 20px; height: 30px; }
+        .dashboard { width: 90%; max-width: 400px; background: #ffffff; border-radius: 20px; padding: 20px; box-sizing: border-box; text-align: center; box-shadow: none; }
+        h2 { margin: 0 0 15px 0; font-size: 20px; color: #000; }
+        #instruction { font-size: 22px; font-weight: bold; color: #007bff; margin-bottom: 20px; height: 30px; }
         
         .task-list { display: flex; justify-content: space-between; margin-bottom: 25px; }
-        .task { display: flex; flex-direction: column; align-items: center; opacity: 0.4; transition: 0.3s; }
+        .task { display: flex; flex-direction: column; align-items: center; opacity: 0.3; transition: 0.3s; color: #333; }
         .task.active { opacity: 1; transform: scale(1.1); }
         .task.done { opacity: 1; color: #00ff00; }
         .icon { font-size: 30px; margin-bottom: 5px; }
         
-        button { width: 100%; padding: 15px; font-size: 18px; border-radius: 12px; border: none; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        button { width: 100%; padding: 15px; font-size: 18px; border-radius: 12px; border: 2px solid #000; font-weight: bold; cursor: pointer; transition: 0.3s; }
         #start_btn { background: #007bff; color: white; }
         #start_btn:disabled { background: #444; color: #888; cursor: not-allowed; }
         #view_btn { background: #00ff00; color: #000; display: none; }
@@ -169,13 +169,22 @@
             canvasElement.height = videoH;
             
             canvasCtx.save();
-            canvasCtx.translate(videoW, 0); 
-            canvasCtx.scale(-1, 1);
-            canvasCtx.drawImage(results.image, 0, 0, videoW, videoH);
-            
-            canvasCtx.fillStyle = "rgba(0, 0, 0, 0.8)";
+            // 1. 背景填充为纯白色
+            canvasCtx.fillStyle = "#ffffff";
             canvasCtx.fillRect(0, 0, videoW, videoH);
-            canvasCtx.setTransform(1, 0, 0, 1, 0, 0);
+
+            // 2. 剪裁出圆形视口显示彩色摄像头画面
+            if (scanPhase !== 'done') {
+                canvasCtx.save();
+                canvasCtx.beginPath();
+                canvasCtx.arc(videoW / 2, videoH / 2, Math.min(videoW, videoH) * 0.42, 0, Math.PI * 2); 
+                canvasCtx.clip();
+
+                canvasCtx.translate(videoW, 0); 
+                canvasCtx.scale(-1, 1);
+                canvasCtx.drawImage(results.image, 0, 0, videoW, videoH);
+                canvasCtx.restore();
+            }
             
             if (results.multiFaceLandmarks && results.multiFaceLandmarks[0]) {
                 if (!isReady) {
