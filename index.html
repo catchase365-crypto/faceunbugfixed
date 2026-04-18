@@ -69,6 +69,14 @@
 
         let isReady = false;
         let scanPhase = 'idle'; 
+        let poseStartTime = 0;
+
+        function speak(text) {
+            const msg = new SpeechSynthesisUtterance(text);
+            msg.lang = 'zh-CN';
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(msg);
+        }
         
         // 存储扫描数据的变量
         let bestFaceData = null;
@@ -180,45 +188,70 @@
 
                 const liveness = detectLiveness(face);
 
+                // 姿态稳定性判定逻辑
+                if (['front', 'left', 'right', 'up', 'down'].includes(scanPhase)) {
+                    if (pose === scanPhase) {
+                        if (!poseStartTime) poseStartTime = Date.now();
+                        if (Date.now() - poseStartTime < 1000) {
+                            instruction.innerText = "请固定 1 秒...";
+                            return;
+                        }
+                    } else {
+                        poseStartTime = 0;
+                        return;
+                    }
+                }
+
                 if (scanPhase === 'front' && pose === 'front') {
                     bestFaceData = face.map(pt => ({ x: pt.x, y: pt.y, z: pt.z }));
                     bestFaceTexture = captureFrame(results, videoW, videoH);
                     setTaskStatus('task_front', 'done');
                     instruction.innerText = "请向左缓慢转头";
+                    speak("很好，请向左转，固定一秒");
                     scanPhase = 'left';
+                    poseStartTime = 0;
                     setTaskStatus('task_left', 'active');
                 } else if (scanPhase === 'left' && pose === 'left') {
                     sideTextures.left = captureFrame(results, videoW, videoH);
                     setTaskStatus('task_left', 'done');
                     instruction.innerText = "请向右缓慢转头";
+                    speak("请向右转，固定一秒");
                     scanPhase = 'right';
+                    poseStartTime = 0;
                     setTaskStatus('task_right', 'active');
                 } else if (scanPhase === 'right' && pose === 'right') {
                     sideTextures.right = captureFrame(results, videoW, videoH);
                     setTaskStatus('task_right', 'done');
                     instruction.innerText = "请向上抬头";
+                    speak("请向上抬头，拍摄鼻孔细节，固定一秒");
                     scanPhase = 'up';
+                    poseStartTime = 0;
                     setTaskStatus('task_up', 'active');
                 } else if (scanPhase === 'up' && pose === 'up') {
                     sideTextures.up = captureFrame(results, videoW, videoH);
                     setTaskStatus('task_up', 'done');
                     instruction.innerText = "请向下低头";
+                    speak("请向下低头，固定一秒");
                     scanPhase = 'down';
+                    poseStartTime = 0;
                     setTaskStatus('task_down', 'active');
                 } else if (scanPhase === 'down' && pose === 'down') {
                     sideTextures.down = captureFrame(results, videoW, videoH);
                     setTaskStatus('task_down', 'done');
                     instruction.innerText = "请快速眨眼";
+                    speak("请眨眼");
                     scanPhase = 'blink';
                     setTaskStatus('task_blink', 'active');
                 } else if (scanPhase === 'blink' && liveness.isBlinking) {
                     setTaskStatus('task_blink', 'done');
                     instruction.innerText = "请张开嘴巴";
+                    speak("请张大嘴巴");
                     scanPhase = 'mouth';
                     setTaskStatus('task_mouth', 'active');
                 } else if (scanPhase === 'mouth' && liveness.isMouthOpen) {
                     setTaskStatus('task_mouth', 'done');
                     instruction.innerText = "真身校验成功！";
+                    speak("验证成功，模型已生成");
                     instruction.style.color = "#00ff00";
                     scanPhase = 'done';
                     setTimeout(() => {
@@ -246,6 +279,7 @@
             statusText.style.display = 'none';
             scanUi.style.display = 'block';
             scanPhase = 'front';
+            speak("请正对屏幕，固定一秒");
             instruction.innerText = "请注视屏幕正中央";
             instruction.style.color = "#ffeb3b";
             setTaskStatus('task_front', 'active');
