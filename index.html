@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能人脸 XR 扫描仪 (表情增强同步版)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <style>
+        body { font-family: -apple-system, sans-serif; margin: 0; background: #000; color: white; display: flex; flex-direction: column; align-items: center; }
+        #container { position: relative; width: 100vw; height: 50vh; background: #111; overflow: hidden; margin-bottom: 15px;}
+        video { display: none; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
+        
+        .dashboard { width: 90%; max-width: 400px; background: #1a1a1a; border-radius: 20px; padding: 20px; box-sizing: border-box; text-align: center; }
+        h2 { margin: 0 0 10px 0; font-size: 18px; color: #fff; }
+        #instruction { font-size: 20px; font-weight: bold; color: #ffeb3b; margin-bottom: 15px; height: 25px; }
+        
+        .task-list { display: flex; justify-content: space-between; margin-bottom: 20px; }
+        .task { display: flex; flex-direction: column; align-items: center; opacity: 0.3; transition: 0.3s; font-size: 12px;}
+        .task.active { opacity: 1; transform: scale(1.1); color: #ffeb3b; }
+        .task.done { opacity: 1; color: #00ff00; }
+        .icon { font-size: 24px; margin-bottom: 5px; }
+        
+        button { width: 100%; padding: 15px; font-size: 18px; border-radius: 12px; border: none; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        #start_btn { background: #007bff; color: white; }
+        #view_btn { background: #00ff00; color: #000; display: none; }
+    </style>
+</head>
+<body>
+
+    <div id="container">
+        <video id="input_video" playsinline></video>
+        <canvas id="output_canvas"></canvas>
+    </div>
+
+    <div class="dashboard">
+        <h2 id="status">正在同步面部引擎...</h2>
+        <div id="scan_ui" style="display: none;">
+            <div id="instruction">请正对屏幕</div>
+            <div class="task-list">
+                <div class="task" id="task_front"><div class="icon">👤</div><span>1.正脸</span></div>
+                <div class="task" id="task_left"><div class="icon">👈</div><span>2.左转</span></div>
+                <div class="task" id="task_right"><div class="icon">👉</div><span>3.右转</span></div>
+            </div>
+        </div>
+        <button id="start_btn" disabled>等待摄像头...</button>
+        <button id="view_btn">建模成功！开启 3D 表情跟随</button>
+    </div>
+
+    <script type="module">
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const statusText = document.getElementById('status');
+        const startBtn = document.getElementById('start_btn');
+        const viewBtn = document.getElementById('view_btn');
+        const scanUi = document.getElementById('scan_ui');
+        const instruction = document.getElementById('instruction');
+
+        let scanPhase = 'idle'; 
+        let bestFaceData = null, bestFaceTexture = null, cameraAspect = 1.0; 
+
+        // 使用 BroadcastChannel，并添加心跳检测
+        const syncChannel = new BroadcastChannel('face_sync');
+
+        const faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+        faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+
+        faceMesh.onResults((results) => {
+            const videoW = videoElement.videoWidth, videoH = videoElement.videoHeight;
+            if (!videoW) return; 
+
+            cameraAspect = videoH / videoW;
+            canvasElement.width = videoW; canvasElement.height = videoH;
+            
+            canvasCtx.save();
+            canvasCtx.translate(videoW, 0); canvasCtx.scale(-1, 1);
+            canvasCtx.drawImage(results.image, 0, 0, videoW, videoH);
+            canvasCtx.fillStyle = "rgba(0, 0, 0, 0.7)";
+            canvasCtx.fillRect(0, 0, videoW, videoH);
+            canvasCtx.setTransform(1, 0, 0, 1, 0, 0);
+            
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks[0]) {
+                if (statusText.innerText.includes("正在")) {
+                    statusText.innerText = "系统就绪"; startBtn.disabled = false;
+                }
+                const face = results.multiFaceLandmarks[0];
+
+                // 核心：无论用户在看哪个标签页，主页都在不停发送坐标
+                if (scanPhase === 'done') {
+                    syncChannel.postMessage({
+                        points: face.map(pt => ({ x: pt.x, y: pt.y, z: pt.z })),
+                        timestamp: Date.now()
+                    });
+                }
+
+                const nose = face[1], lCheek = face[234], rCheek = face[454]; 
+                const ratio = Math.abs(nose.x - lCheek.x) / (Math.abs(nose.x - rCheek.x) + 0.0001);
+
+                for (const landmark of face) {
+                    canvasCtx.fillStyle = scanPhase !== 'idle' && scanPhase !== 'done' ? "#00ff00" : "#555";
+                    canvasCtx.fillRect((1 - landmark.x) * videoW, landmark.y * videoH, 2, 2);
+                }
+
+                if (scanPhase === 'front' && ratio > 0.8 && ratio < 1.2) {
+                    bestFaceData = face.map(pt => ({ x: pt.x, y: pt.y, z: pt.z }));
+                    const offCanvas = document.createElement('canvas');
+                    offCanvas.width = videoW; offCanvas.height = videoH;
+                    const offCtx = offCanvas.getContext('2d');
+                    offCtx.translate(videoW, 0); offCtx.scale(-1, 1);
+                    offCtx.drawImage(results.image, 0, 0, videoW, videoH);
+                    bestFaceTexture = offCanvas.toDataURL('image/jpeg', 0.9);
+                    document.getElementById('task_front').className = 'task done';
+                    instruction.innerText = "向左转头"; scanPhase = 'left';
+                    document.getElementById('task_left').className = 'task active';
+                } else if (scanPhase === 'left' && ratio > 2.0) {
+                    document.getElementById('task_left').className = 'task done';
+                    instruction.innerText = "向右转头"; scanPhase = 'right';
+                    document.getElementById('task_right').className = 'task active';
+                } else if (scanPhase === 'right' && ratio < 0.5) {
+                    document.getElementById('task_right').className = 'task done';
+                    instruction.innerText = "扫描大功告成！"; scanPhase = 'done';
+                    setTimeout(() => { startBtn.style.display='none'; viewBtn.style.display='block'; }, 500);
+                }
+            }
+            canvasCtx.restore();
+        });
+
+        const camera = new Camera(videoElement, { onFrame: async () => { await faceMesh.send({image: videoElement}); }, width: 640, height: 480 });
+        camera.start();
+
+        startBtn.onclick = () => {
+            startBtn.style.display = 'none'; scanUi.style.display = 'block';
+            scanPhase = 'front'; instruction.innerText = "请正对屏幕";
+            document.getElementById('task_front').className = 'task active';
+        };
+
+        viewBtn.onclick = () => {
+            sessionStorage.setItem('faceData', JSON.stringify(bestFaceData));
+            sessionStorage.setItem('faceTexture', bestFaceTexture);
+            sessionStorage.setItem('cameraAspect', cameraAspect.toString());
+            window.open(window.location.href + '#viewer', '_blank'); // 技巧：打开同一个地址的预览模式
+        };
+
+        // 如果检测到是预览模式（URL 包含 #viewer）
+        if (window.location.hash === '#viewer') {
+            document.body.innerHTML = `
+                <style>
+                    body { margin: 0; background: #000; overflow: hidden; }
+                    #sync_indicator { position: absolute; top: 20px; right: 20px; width: 12px; height: 12px; background: #555; border-radius: 50%; border: 2px solid #fff; }
+                    #sync_indicator.active { background: #00ff00; box-shadow: 0 0 10px #00ff00; }
+                    .ctrl { position: absolute; bottom: 30px; width: 100%; text-align: center; }
+                    .btn { background: rgba(0,123,255,0.8); color: white; border: none; padding: 12px 25px; border-radius: 20px; cursor: pointer; font-weight: bold;}
+                </style>
+                <div id="sync_indicator"></div>
+                <div class="ctrl"><button class="btn" id="toggle_follow">🚀 开启实时表情捕捉</button></div>
+            `;
+            
+            const rawData = JSON.parse(sessionStorage.getItem('faceData'));
+            const texB64 = sessionStorage.getItem('faceTexture');
+            const aspect = parseFloat(sessionStorage.getItem('cameraAspect'));
+            const indicator = document.getElementById('sync_indicator');
+
+            const scene = new THREE.Scene();
+            const camera3d = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+            
+            const controls = new THREE.OrbitControls(camera3d, renderer.domElement);
+            controls.enableDamping = true;
+
+            // 建立模型
+            const points2D = rawData.map(v => [v.x, v.y]);
+            const delaunay = Delaunator.from(points2D);
+            const geometry = new THREE.BufferGeometry();
+            const indices = new Uint32Array(delaunay.triangles);
+            
+            // 计算邻居索引（用于平滑）
+            const neighbors = Array.from({length: rawData.length}, () => new Set());
+            for (let i = 0; i < indices.length; i += 3) {
+                neighbors[indices[i]].add(indices[i+1]); neighbors[indices[i]].add(indices[i+2]);
+                neighbors[indices[i+1]].add(indices[i]); neighbors[indices[i+1]].add(indices[i+2]);
+                neighbors[indices[i+2]].add(indices[i]); neighbors[indices[i+2]].add(indices[i+1]);
+            }
+
+            const texture = new THREE.TextureLoader().load(texB64);
+            const material = new THREE.MeshStandardMaterial({ map: texture, side: THREE.DoubleSide, roughness: 0.6 });
+            const mesh = new THREE.Mesh(geometry, material);
+            scene.add(mesh);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const sun = new THREE.DirectionalLight(0xffffff, 0.8); sun.position.set(1,1,2); scene.add(sun);
+
+            camera3d.position.z = 1.3;
+
+            let isFollowing = false;
+            document.getElementById('toggle_follow').onclick = (e) => {
+                isFollowing = !isFollowing;
+                e.target.innerText = isFollowing ? "🟢 表情同步中 (请让摄像头页保持可见)" : "🚀 开启实时表情捕捉";
+                e.target.style.background = isFollowing ? "#28a745" : "#007bff";
+            };
+
+            const channel = new BroadcastChannel('face_sync');
+            channel.onmessage = (event) => {
+                // 收到信号，指示灯闪烁
+                indicator.classList.add('active');
+                setTimeout(() => indicator.classList.remove('active'), 50);
+
+                if (isFollowing) {
+                    const face = event.data.points;
+                    let pts = face.map(v => ({
+                        x: (0.5 - v.x) * 3,
+                        y: (0.5 - v.y) * 3 * aspect,
+                        z: -v.z * 5 // 增强 Z 轴深度感
+                    }));
+
+                    // 实时进行一次轻量级平滑处理
+                    for (let iter = 0; iter < 1; iter++) {
+                        pts = pts.map((p, i) => {
+                            const nList = Array.from(neighbors[i]);
+                            let avg = { x: 0, y: 0, z: 0 };
+                            nList.forEach(idx => { avg.x += pts[idx].x; avg.y += pts[idx].y; avg.z += pts[idx].z; });
+                            return { x: p.x * 0.6 + (avg.x/nList.length) * 0.4, y: p.y * 0.6 + (avg.y/nList.length) * 0.4, z: p.z * 0.6 + (avg.z/nList.length) * 0.4 };
+                        });
+                    }
+
+                    const posAttr = mesh.geometry.attributes.position || new THREE.BufferAttribute(new Float32Array(pts.length * 3), 3);
+                    if (!mesh.geometry.attributes.position) {
+                        mesh.geometry.setAttribute('position', posAttr);
+                        mesh.geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(rawData.flatMap(v => [1-v.x, 1-v.y])), 2));
+                        mesh.geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+                    }
+
+                    for (let i = 0; i < pts.length; i++) {
+                        posAttr.array[i*3] = pts[i].x; posAttr.array[i*3+1] = pts[i].y; posAttr.array[i*3+2] = pts[i].z;
+                    }
+                    posAttr.needsUpdate = true;
+                    mesh.geometry.computeVertexNormals();
+                }
+            };
+
+            function animate() { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera3d); }
+            animate();
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/delaunator@5.0.0/delaunator.min.js"></script>
+</body>
+</html>
