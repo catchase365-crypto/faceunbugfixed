@@ -49,6 +49,8 @@
                 <div class="task" id="task_down"><div class="icon">👇</div><span>低头</span></div>
                 <div class="task" id="task_blink"><div class="icon">👁️</div><span>眨眼</span></div>
                 <div class="task" id="task_mouth"><div class="icon">😮</div><span>张嘴</span></div>
+                <div class="task" id="task_eyebrow"><div class="icon">🤨</div><span>挑眉</span></div>
+                <div class="task" id="task_smile"><div class="icon">😊</div><span>微笑</span></div>
             </div>
         </div>
 
@@ -121,9 +123,14 @@
         function detectLiveness(landmarks) {
             const eyeTop = landmarks[159].y, eyeBot = landmarks[145].y;
             const mouthTop = landmarks[13].y, mouthBot = landmarks[14].y;
+            const eyebrow = landmarks[52].y, eyeCenter = landmarks[159].y;
+            const mouthL = landmarks[61].x, mouthR = landmarks[291].x;
+            const mouthTopLip = landmarks[0].y, mouthBotLip = landmarks[17].y;
             return {
                 isBlinking: Math.abs(eyeTop - eyeBot) < 0.012,
-                isMouthOpen: Math.abs(mouthTop - mouthBot) > 0.04
+                isMouthOpen: Math.abs(mouthTop - mouthBot) > 0.04,
+                isEyebrowRaised: Math.abs(eyebrow - eyeCenter) > 0.04,
+                isSmiling: (Math.abs(mouthL - mouthR) > 0.16) && (Math.abs(mouthTopLip - mouthBotLip) < 0.035)
             };
         }
 
@@ -136,6 +143,8 @@
                 const icon = el.querySelector('.icon');
                 if (taskId === 'task_blink') icon.innerText = '😉';
                 else if (taskId === 'task_mouth') icon.innerText = '😲';
+                else if (taskId === 'task_eyebrow') icon.innerText = '🤨';
+                else if (taskId === 'task_smile') icon.innerText = '😁';
                 else icon.innerText = '✅';
             }
         }
@@ -250,8 +259,20 @@
                     setTaskStatus('task_mouth', 'active');
                 } else if (scanPhase === 'mouth' && liveness.isMouthOpen) {
                     setTaskStatus('task_mouth', 'done');
+                    instruction.innerText = "请用力挑眉";
+                    speak("很好，请用力挑眉");
+                    scanPhase = 'eyebrow';
+                    setTaskStatus('task_eyebrow', 'active');
+                } else if (scanPhase === 'eyebrow' && liveness.isEyebrowRaised) {
+                    setTaskStatus('task_eyebrow', 'done');
+                    instruction.innerText = "请露出微笑";
+                    speak("请保持微笑，捕捉表情细节");
+                    scanPhase = 'smile';
+                    setTaskStatus('task_smile', 'active');
+                } else if (scanPhase === 'smile' && liveness.isSmiling) {
+                    setTaskStatus('task_smile', 'done');
                     instruction.innerText = "真身校验成功！";
-                    speak("验证成功，模型已生成");
+                    speak("所有动作已完成，模型正在生成");
                     instruction.style.color = "#00ff00";
                     scanPhase = 'done';
                     setTimeout(() => {
